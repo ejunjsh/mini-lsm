@@ -59,7 +59,7 @@ pub struct MergeIterator<I: StorageIterator> {
     current: Option<HeapWrapper<I>>,
 }
 
-impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> MergeIterator<I> {
+impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
         if iters.is_empty() {
             return Self {
@@ -86,14 +86,10 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> MergeIter
         }
 
         let current = heap.pop().unwrap();
-        let mut merge_iterator = Self {
+        Self {
             iters: heap,
             current: Some(current),
-        };
-        if merge_iterator.value().is_empty() {
-            merge_iterator.next().unwrap();
         }
-        merge_iterator
     }
 }
 
@@ -158,9 +154,6 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
             }
         }
 
-        if self.value().is_empty() {
-            self.next()?;
-        }
         Ok(())
     }
 }
