@@ -159,6 +159,10 @@ fn range_overlap(
     true
 }
 
+fn key_within(user_key: &[u8], table_begin: KeySlice, table_end: KeySlice) -> bool {
+    table_begin.raw_ref() <= user_key && user_key <= table_end.raw_ref()
+}
+
 #[derive(Clone, Debug)]
 pub enum CompactionFilter {
     Prefix(Bytes),
@@ -397,12 +401,31 @@ impl LsmStorageInner {
 
         let mut l0_iters = Vec::with_capacity(snapshot.l0_sstables.len());
 
+        let keep_table = |key: &[u8], table: &SsTable| {
+            if key_within(
+                key,
+                table.first_key().as_key_slice(),
+                table.last_key().as_key_slice(),
+            ) {
+                if let Some(bloom) = &table.bloom {
+                    if bloom.may_contain(farmhash::fingerprint32(key)) {
+                        return true;
+                    }
+                } else {
+                    return true;
+                }
+            }
+            false
+        };
+
         for table in snapshot.l0_sstables.iter() {
             let table = snapshot.sstables[table].clone();
-            l0_iters.push(Box::new(SsTableIterator::create_and_seek_to_key(
-                table,
-                KeySlice::from_slice(_key),
-            )?));
+            if keep_table(_key, &table) {
+                l0_iters.push(Box::new(SsTableIterator::create_and_seek_to_key(
+                    table,
+                    KeySlice::from_slice(_key),
+                )?));
+            }
         }
 
         let l0_iter = MergeIterator::create(l0_iters);
