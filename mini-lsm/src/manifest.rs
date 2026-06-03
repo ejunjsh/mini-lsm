@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::compact::CompactionTask;
 
+
 pub struct Manifest {
     file: Arc<Mutex<File>>,
 }
