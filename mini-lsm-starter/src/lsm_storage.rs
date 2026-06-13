@@ -356,6 +356,12 @@ impl LsmStorageInner {
 
         let manifest_path = path.join("MANIFEST");
         if !manifest_path.exists() {
+            if options.enable_wal {
+                state.memtable = Arc::new(MemTable::create_with_wal(
+                    state.memtable.id(),
+                    Self::path_of_wal_static(path, state.memtable.id()),
+                )?);
+            }
             manifest = Manifest::create(&manifest_path).context("failed to create manifest")?;
             manifest.add_record_when_init(ManifestRecord::NewMemtable(state.memtable.id()))?;
         } else {
@@ -424,7 +430,24 @@ impl LsmStorageInner {
             }
 
             // recover memtables
-            state.memtable = Arc::new(MemTable::create(next_sst_id));
+            if options.enable_wal {
+                let mut wal_cnt = 0;
+                for id in memtables.iter() {
+                    let memtable =
+                        MemTable::recover_from_wal(*id, Self::path_of_wal_static(path, *id))?;
+                    if !memtable.is_empty() {
+                        state.imm_memtables.insert(0, Arc::new(memtable));
+                        wal_cnt += 1;
+                    }
+                }
+                println!("{} WALs recovered", wal_cnt);
+                state.memtable = Arc::new(MemTable::create_with_wal(
+                    next_sst_id,
+                    Self::path_of_wal_static(path, next_sst_id),
+                )?);
+            } else {
+                state.memtable = Arc::new(MemTable::create(next_sst_id));
+            }
             m.add_record_when_init(ManifestRecord::NewMemtable(state.memtable.id()))?;
             next_sst_id += 1;
             manifest = m;
@@ -611,6 +634,7 @@ impl LsmStorageInner {
         *guard = Arc::new(snapshot);
 
         drop(guard);
+        old_memtable.sync_wal()?;
 
         Ok(())
     }
@@ -618,7 +642,14 @@ impl LsmStorageInner {
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
         let memtable_id = self.next_sst_id();
-        let memtable = Arc::new(MemTable::create(memtable_id));
+        let memtable = if self.options.enable_wal {
+            Arc::new(MemTable::create_with_wal(
+                memtable_id,
+                self.path_of_wal(memtable_id),
+            )?)
+        } else {
+            Arc::new(MemTable::create(memtable_id))
+        };
 
         self.freeze_memtable_with_memtable(memtable)?;
 
@@ -674,6 +705,10 @@ impl LsmStorageInner {
             snapshot.sstables.insert(sst_id, sst);
             // Update the snapshot.
             *guard = Arc::new(snapshot);
+        }
+
+        if self.options.enable_wal {
+            std::fs::remove_file(self.path_of_wal(sst_id))?;
         }
 
         self.manifest
