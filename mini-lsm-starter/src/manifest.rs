@@ -64,6 +64,10 @@ impl Manifest {
             let slice = &buf_ptr[..len as usize];
             let json = serde_json::from_slice::<ManifestRecord>(slice)?;
             buf_ptr.advance(len as usize);
+            let checksum = buf_ptr.get_u32();
+            if checksum != crc32fast::hash(slice) {
+                bail!("checksum mismatched!");
+            }
             records.push(json);
         }
         Ok((
@@ -84,8 +88,10 @@ impl Manifest {
 
     pub fn add_record_when_init(&self, _record: ManifestRecord) -> Result<()> {
         let mut file = self.file.lock();
-        let buf = serde_json::to_vec(&_record)?;
+        let mut buf = serde_json::to_vec(&_record)?;
+        let hash = crc32fast::hash(&buf);
         file.write_all(&(buf.len() as u64).to_be_bytes())?;
+        buf.put_u32(hash);
         file.write_all(&buf)?;
         file.sync_all()?;
         Ok(())
