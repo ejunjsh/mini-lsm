@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::Arc;
@@ -22,13 +19,12 @@ use std::sync::atomic::AtomicUsize;
 
 use anyhow::{Ok, Result};
 use bytes::Bytes;
-use clap::builder;
 use crossbeam_skiplist::SkipMap;
 use crossbeam_skiplist::map::Entry;
 use ouroboros::self_referencing;
 
 use crate::iterators::StorageIterator;
-use crate::key::KeySlice;
+use crate::key::{KeyBytes, KeySlice, TS_DEFAULT, TS_RANGE_BEGIN, TS_RANGE_END};
 use crate::table::SsTableBuilder;
 use crate::wal::Wal;
 
@@ -37,7 +33,7 @@ use crate::wal::Wal;
 /// An initial implementation of memtable is part of week 1, day 1. It will be incrementally implemented in other
 /// chapters of week 1 and week 2.
 pub struct MemTable {
-    map: Arc<SkipMap<Bytes, Bytes>>,
+    pub(crate) map: Arc<SkipMap<Bytes, Bytes>>,
     wal: Option<Wal>,
     id: usize,
     approximate_size: Arc<AtomicUsize>,
@@ -50,6 +46,46 @@ pub(crate) fn map_bound(bound: Bound<&[u8]>) -> Bound<Bytes> {
         Bound::Excluded(x) => Bound::Excluded(Bytes::copy_from_slice(x)),
         Bound::Unbounded => Bound::Unbounded,
     }
+}
+
+/// Create a bound of `Bytes` from a bound of `KeySlice`.
+pub(crate) fn map_key_bound(bound: Bound<KeySlice>) -> Bound<KeyBytes> {
+    match bound {
+        Bound::Included(x) => Bound::Included(KeyBytes::from_bytes_with_ts(
+            Bytes::copy_from_slice(x.key_ref()),
+            x.ts(),
+        )),
+        Bound::Excluded(x) => Bound::Excluded(KeyBytes::from_bytes_with_ts(
+            Bytes::copy_from_slice(x.key_ref()),
+            x.ts(),
+        )),
+        Bound::Unbounded => Bound::Unbounded,
+    }
+}
+
+/// Create a bound of `KeySlice` from a bound of `&[u8]`.
+pub(crate) fn map_key_bound_plus_ts<'a>(
+    lower: Bound<&'a [u8]>,
+    upper: Bound<&'a [u8]>,
+    ts: u64,
+) -> (Bound<KeySlice<'a>>, Bound<KeySlice<'a>>) {
+    (
+        match lower {
+            Bound::Included(x) => Bound::Included(KeySlice::from_slice(x, ts)),
+            Bound::Excluded(x) => Bound::Excluded(KeySlice::from_slice(x, TS_RANGE_END)),
+            Bound::Unbounded => Bound::Unbounded,
+        },
+        match upper {
+            Bound::Included(x) => {
+                // Note that we order the ts descending, but for a MVCC scan, we need all the history
+                // so that we can access the latest key in case it is not updated in the current ts.
+                // Therefore, we need to scan all the way to ts 0.
+                Bound::Included(KeySlice::from_slice(x, TS_RANGE_END))
+            }
+            Bound::Excluded(x) => Bound::Excluded(KeySlice::from_slice(x, TS_RANGE_BEGIN)),
+            Bound::Unbounded => Bound::Unbounded,
+        },
+    )
 }
 
 impl MemTable {
@@ -153,7 +189,10 @@ impl MemTable {
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
     pub fn flush(&self, _builder: &mut SsTableBuilder) -> Result<()> {
         for entry in self.map.iter() {
-            _builder.add(KeySlice::from_slice(&entry.key()[..]), &entry.value()[..]);
+            _builder.add(
+                KeySlice::from_slice(&entry.key()[..], TS_DEFAULT),
+                &entry.value()[..],
+            );
         }
         Ok(())
     }
@@ -208,7 +247,7 @@ impl StorageIterator for MemTableIterator {
     }
 
     fn key(&self) -> KeySlice<'_> {
-        KeySlice::from_slice(&self.borrow_item().0[..])
+        KeySlice::from_slice(&self.borrow_item().0[..], TS_DEFAULT)
     }
 
     fn is_valid(&self) -> bool {
