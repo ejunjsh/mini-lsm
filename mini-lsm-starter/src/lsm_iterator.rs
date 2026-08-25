@@ -54,7 +54,7 @@ impl LsmIterator {
             prev_key: Vec::new(),
         };
         iter.check_end_bound();
-        iter.move_to_non_delete()?;
+        iter.move_to_key()?;
         Ok(iter)
     }
 
@@ -79,9 +79,31 @@ impl LsmIterator {
         Ok(())
     }
 
-    fn move_to_non_delete(&mut self) -> Result<()> {
-        while self.is_valid() && self.inner.value().is_empty() {
-            self.next_inner()?;
+    fn move_to_key(&mut self) -> Result<()> {
+        loop {
+            while self.inner.is_valid() && self.inner.key().key_ref() == self.prev_key {
+                self.next_inner()?;
+            }
+            if !self.inner.is_valid() {
+                break;
+            }
+            self.prev_key.clear();
+            self.prev_key.extend(self.inner.key().key_ref());
+            while self.inner.is_valid()
+                && self.inner.key().key_ref() == self.prev_key
+                && self.inner.key().ts() > self.read_ts
+            {
+                self.next_inner()?;
+            }
+            if !self.inner.is_valid() {
+                break;
+            }
+            if self.inner.key().key_ref() != self.prev_key {
+                continue;
+            }
+            if !self.inner.value().is_empty() {
+                break;
+            }
         }
         Ok(())
     }
@@ -104,7 +126,7 @@ impl StorageIterator for LsmIterator {
 
     fn next(&mut self) -> Result<()> {
         self.next_inner()?;
-        self.move_to_non_delete()?;
+        self.move_to_key()?;
         Ok(())
     }
 
