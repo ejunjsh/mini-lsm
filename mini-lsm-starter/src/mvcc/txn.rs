@@ -48,6 +48,9 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        if self.committed.load(Ordering::SeqCst) {
+            panic!("cannot operate on committed txn!");
+        }
         self.inner.get_with_ts(key, self.read_ts)
     }
 
@@ -86,7 +89,9 @@ impl Transaction {
 }
 
 impl Drop for Transaction {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        self.inner.mvcc().ts.lock().1.remove_reader(self.read_ts)
+    }
 }
 
 type SkipMapRangeIter<'a> =

@@ -38,6 +38,7 @@ use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::key::KeySlice;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
 use crate::manifest::ManifestRecord;
+use crate::mvcc::watermark;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -139,11 +140,38 @@ impl LsmStorageInner {
         let mut new_sst = Vec::new();
         let mut entries_in_builder: usize = 0;
         let mut last_key = Vec::<u8>::new();
+        let watermark = self.mvcc().watermark();
+        let mut first_key_below_watermark = false;
         while iter.is_valid() {
             if builder.is_none() {
                 builder = Some(SsTableBuilder::new(self.options.block_size));
             }
             let same_as_last_key = iter.key().key_ref() == last_key;
+            if !same_as_last_key {
+                first_key_below_watermark = true;
+            }
+
+            if compact_to_bottom_level
+                && !same_as_last_key
+                && iter.key().ts() <= watermark
+                && iter.value().is_empty()
+            {
+                last_key.clear();
+                last_key.extend(iter.key().key_ref());
+                iter.next()?;
+                first_key_below_watermark = false;
+                continue;
+            }
+
+            if iter.key().ts() <= watermark {
+                if !first_key_below_watermark {
+                    iter.next()?;
+                    continue;
+                }
+
+                first_key_below_watermark = false;
+            }
+
             let builder_inner = builder.as_mut().unwrap();
             if builder_inner.estimated_size() >= self.options.target_sst_size
                 && !same_as_last_key
