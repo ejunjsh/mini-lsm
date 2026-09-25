@@ -598,9 +598,7 @@ impl LsmStorageInner {
         }
         {
             let guard = self.state.read();
-            for kv in batch_datas {
-                guard.memtable.put(kv.0, kv.1)?;
-            }
+            guard.memtable.put_batch(&batch_datas)?;
             size = guard.memtable.approximate_size();
         }
         self.mvcc().update_commit_ts(ts);
