@@ -114,7 +114,7 @@ impl Transaction {
         }
     }
 
- pub fn commit(&self) -> Result<()> {
+    pub fn commit(&self) -> Result<()> {
         self.committed
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .expect("cannot operate on committed txn!");
